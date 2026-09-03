@@ -1,13 +1,44 @@
 use crate::cover;
 use anyhow::anyhow;
-use embedded_graphics::prelude::Size;
+use core::fmt::Display;
+use embedded_graphics_core::geometry::Size;
 use image::imageops::FilterType;
-use image::{DynamicImage, GrayImage};
-use inkview::screen::ScreenOrientation;
+use image::{DynamicImage, ImageBuffer, Luma};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
-pub struct State {
+pub const PB_INKPAD4_SCREEN_SIZE: Size = Size {
+    width: 1404,
+    height: 1872,
+};
+pub const PB_TOUCHLUX3_SCREEN_SIZE: Size = Size {
+    width: 758,
+    height: 1024,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default)]
+pub enum Orientation {
+    #[default]
+    Portrait0Deg,
+    Landscape90Deg,
+    Portrait180Deg,
+    Landscape270Deg,
+}
+
+impl Display for Orientation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Orientation::Portrait0Deg => write!(f, "Portrait0Deg"),
+            Orientation::Landscape90Deg => write!(f, "Landscape90Deg"),
+            Orientation::Portrait180Deg => write!(f, "Portrait180Deg"),
+            Orientation::Landscape270Deg => write!(f, "Landscape270Deg"),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct App {
     // Book search dir. Currently does not recurse.
     #[allow(unused)]
     search_dir: PathBuf,
@@ -17,15 +48,18 @@ pub struct State {
     pos: usize,
     /// Whether to show overlay containing state information.
     overlay: bool,
-    /// The orientatino as interpreteted by inkview. Valid values: 0-3.
-    orientation: ScreenOrientation,
-    // image and buffer are invalidated when cycling through `pos` and lazily recomputed on demand.
-    cover_image: Option<DynamicImage>,
-    cover_image_buf: Option<GrayImage>,
+    /// Screen size.
+    screen_size: Size,
+    /// UI orientation.
+    orientation: Orientation,
+    // Fetched cover image.
+    cover_image: Option<Rc<DynamicImage>>,
+    // Buffer for cover image.
+    cover_image_buf: Option<Rc<ImageBuffer<Luma<u8>, Vec<u8>>>>,
 }
 
-impl State {
-    pub fn new(search_dir: PathBuf) -> Self {
+impl App {
+    pub fn new(search_dir: PathBuf, screen_size: Size) -> Self {
         let Ok(books) = retrieve_books_in_dir(&search_dir)
             .inspect_err(|err| eprintln!("Unable to read directory: {err:?}"))
         else {
@@ -34,7 +68,8 @@ impl State {
                 books: Vec::new(),
                 pos: 0,
                 overlay: false,
-                orientation: ScreenOrientation::default(),
+                screen_size,
+                orientation: Orientation::default(),
                 cover_image: None,
                 cover_image_buf: None,
             };
@@ -45,7 +80,8 @@ impl State {
             books,
             pos: 0,
             overlay: false,
-            orientation: ScreenOrientation::default(),
+            screen_size,
+            orientation: Orientation::default(),
             cover_image: None,
             cover_image_buf: None,
         }
@@ -64,40 +100,45 @@ impl State {
         self.overlay
     }
 
-    pub fn orientation(&self) -> ScreenOrientation {
+    pub fn update_screen_size(&mut self, screen_size: Size) {
+        self.screen_size = screen_size;
+        self.regen_cover_image();
+    }
+
+    pub fn orientation(&self) -> Orientation {
         self.orientation
     }
 
-    pub fn orientation_cycle_backward(&mut self) -> ScreenOrientation {
+    pub fn orientation_cycle_backward(&mut self) -> Orientation {
         self.orientation = match self.orientation {
-            ScreenOrientation::Portrait0Deg => ScreenOrientation::Landscape90Deg,
-            ScreenOrientation::Landscape90Deg => ScreenOrientation::Portrait180Deg,
-            ScreenOrientation::Portrait180Deg => ScreenOrientation::Landscape270Deg,
-            ScreenOrientation::Landscape270Deg => ScreenOrientation::Portrait0Deg,
+            Orientation::Portrait0Deg => Orientation::Landscape90Deg,
+            Orientation::Landscape90Deg => Orientation::Portrait180Deg,
+            Orientation::Portrait180Deg => Orientation::Landscape270Deg,
+            Orientation::Landscape270Deg => Orientation::Portrait0Deg,
         };
-        self.cover_image_buf.take();
+        self.regen_cover_image_buf();
         self.orientation
     }
 
-    pub fn orientation_cycle_forward(&mut self) -> ScreenOrientation {
+    pub fn orientation_cycle_forward(&mut self) -> Orientation {
         self.orientation = match self.orientation {
-            ScreenOrientation::Portrait0Deg => ScreenOrientation::Landscape270Deg,
-            ScreenOrientation::Landscape270Deg => ScreenOrientation::Portrait180Deg,
-            ScreenOrientation::Portrait180Deg => ScreenOrientation::Landscape90Deg,
-            ScreenOrientation::Landscape90Deg => ScreenOrientation::Portrait0Deg,
+            Orientation::Portrait0Deg => Orientation::Landscape270Deg,
+            Orientation::Landscape270Deg => Orientation::Portrait180Deg,
+            Orientation::Portrait180Deg => Orientation::Landscape90Deg,
+            Orientation::Landscape90Deg => Orientation::Portrait0Deg,
         };
-        self.cover_image_buf.take();
+        self.regen_cover_image_buf();
         self.orientation
     }
 
     pub fn pos_cycle_backward(&mut self) -> usize {
-        self.pos = self.pos.saturating_sub(1);
-        let max_pos = self.books.len().saturating_sub(1);
-        if self.pos == 0 {
+        if let Some(pos) = self.pos.checked_sub(1) {
+            self.pos = pos;
+        } else {
+            let max_pos = self.books.len().saturating_sub(1);
             self.pos = max_pos;
         }
-        self.cover_image.take();
-        self.cover_image_buf.take();
+        self.regen_cover_image();
         self.pos
     }
 
@@ -107,8 +148,7 @@ impl State {
         if self.pos > max_pos {
             self.pos = 0;
         }
-        self.cover_image.take();
-        self.cover_image_buf.take();
+        self.regen_cover_image();
         self.pos
     }
 
@@ -116,35 +156,51 @@ impl State {
         self.books.get(self.pos).map(|p| p.as_ref())
     }
 
-    pub fn cover_image(&mut self) -> Option<&DynamicImage> {
-        if let Some(ref cover_image) = self.cover_image {
-            return Some(cover_image);
+    fn regen_cover_image(&mut self) {
+        self.cover_image.take();
+        self.cover_image_buf.take();
+        let Some(book) = self.current_book() else {
+            return;
         };
-        let book = self.current_book()?;
-        let cover_image = cover::retrieve_cover(book)
-            .inspect_err(|err| eprintln!("Failed to retrieve book cover: {err:?}"))
-            .ok()?;
-        self.cover_image = Some(cover_image);
-        self.cover_image.as_ref()
+        let Ok(img) = cover::retrieve_cover(book).inspect_err(|err| {
+            eprintln!("Retrieving cover image failed: {err}");
+        }) else {
+            return;
+        };
+        let img = match self.orientation {
+            Orientation::Portrait0Deg => img,
+            Orientation::Landscape90Deg => img.rotate90(),
+            Orientation::Portrait180Deg => img.rotate180(),
+            Orientation::Landscape270Deg => img.rotate270(),
+        };
+        let img = Rc::new(img);
+        self.cover_image = Some(Rc::clone(&img));
+        self.regen_cover_image_buf();
     }
 
-    pub fn cover_image_buf(&mut self, size: Size) -> Option<&GrayImage> {
-        if let Some(ref buf) = self.cover_image_buf {
-            return Some(buf);
-        }
-        let orientation = self.orientation;
-        let cover_image = self.cover_image()?;
-        let cover_image = match orientation {
-            ScreenOrientation::Portrait0Deg => cover_image,
-            ScreenOrientation::Landscape90Deg => &cover_image.rotate90(),
-            ScreenOrientation::Portrait180Deg => &cover_image.rotate180(),
-            ScreenOrientation::Landscape270Deg => &cover_image.rotate270(),
+    pub fn regen_cover_image_buf(&mut self) {
+        self.cover_image_buf.take();
+        let Some(img) = self.cover_image.as_ref() else {
+            return;
         };
-        let buf = cover_image
-            .resize_to_fill(size.width, size.height, FilterType::Nearest)
-            .to_luma8();
-        self.cover_image_buf = Some(buf);
-        self.cover_image_buf.as_ref()
+        let buf = img
+            .resize_to_fill(
+                self.screen_size.width,
+                self.screen_size.height,
+                FilterType::Nearest,
+            )
+            .into_luma8();
+        let buf = Rc::new(buf);
+        self.cover_image_buf = Some(Rc::clone(&buf));
+    }
+
+    #[allow(unused)]
+    fn cover_image(&self) -> Option<Rc<DynamicImage>> {
+        self.cover_image.as_ref().map(Rc::clone)
+    }
+
+    pub fn cover_image_buf(&self) -> Option<Rc<ImageBuffer<Luma<u8>, Vec<u8>>>> {
+        self.cover_image_buf.as_ref().map(Rc::clone)
     }
 }
 

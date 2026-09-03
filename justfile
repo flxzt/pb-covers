@@ -34,7 +34,7 @@ cargo_out_profile := if cargo_profile == "dev" { "debug" } else { cargo_profile 
 [private]
 cargo_sdk_feature := "sdk-" + replace(pb_sdk_version, ".", "-")
 
-export RUST_LOG := env("RUST_LOG", "debug")
+export RUST_LOG := env("RUST_LOG", "pb_covers=debug,pb_covers_cli=debug,pb_covers_simulator=debug")
 export RUST_BACKTRACE := env("RUST_BACKTRACE", "1")
 
 default:
@@ -49,10 +49,10 @@ prerequisites:
     #!/usr/bin/env bash
     set -euxo pipefail
     if [[ ('{{linux_distr}}' =~ 'fedora') ]]; then
-        {{sudo_cmd}} dnf install -y zig execstack
+        {{sudo_cmd}} dnf install -y zig execstack SDL2-devel
     elif [[ '{{linux_distr}}' =~ 'debian' || '{{linux_distr}}' =~ 'ubuntu' ]]; then
         {{sudo_cmd}} apt-get update
-        {{sudo_cmd}} apt-get install -y zig execstack
+        {{sudo_cmd}} apt-get install -y zig execstack sdl2-dev
     else
         echo "Can't install system dependencies, unsupported distro."
         exit 1
@@ -65,14 +65,13 @@ build:
     cargo zigbuild \
         --target {{cargo_zigbuild_target}} \
         --profile {{cargo_profile}} \
-        --features={{cargo_sdk_feature}} \
+        --features="inkview {{cargo_sdk_feature}}" \
         --bin pb-covers
     execstack -s {{ "target" / cargo_build_target / cargo_out_profile / "pb-covers" }}
 
 build-cli:
     cargo build \
         --profile {{cargo_profile}} \
-        --features={{cargo_sdk_feature}} \
         --bin pb-covers-cli
 
 # Format the code.
@@ -82,14 +81,22 @@ fmt:
 # Lint the app.
 lint:
     cargo clippy \
-        --features={{cargo_sdk_feature}}
+        --features="inkview {{cargo_sdk_feature}} simulator"
 
 # Run the cli.
 run-cli *ARGS:
     cargo run \
         --profile {{cargo_profile}} \
-        --features={{cargo_sdk_feature}} \
+        --features="inkview {{cargo_sdk_feature}}" \
         --bin pb-covers-cli \
+        {{ARGS}}
+
+# Run the cli.
+run-simulator *ARGS:
+    cargo run \
+        --profile {{cargo_profile}} \
+        --features="simulator" \
+        --bin pb-covers-simulator \
         {{ARGS}}
 
 # Deploy the application to the device over USB.
