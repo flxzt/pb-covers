@@ -1,0 +1,15 @@
+{
+    "tasks": [
+        {
+            "command": "just build",
+            "label": "build",
+            "type": "shell"
+        },
+        {
+            "command": "just deploy-usb",
+            "label": "deploy-usb",
+            "type": "shell"
+        },
+    ],
+    "version": "2.0.0"
+}

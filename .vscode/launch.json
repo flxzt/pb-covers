@@ -1,0 +1,25 @@
+{
+    "configurations": [
+        {
+            "name": "launch and debug (remote)",
+            "preLaunchTask": "build",
+            "processCreateCommands": [
+                "gdb-remote ${input:gdbserver_listen_addr}"
+            ],
+            "request": "launch",
+            "targetCreateCommands": [
+                "target create ${workspaceFolder:pb-covers}/target/armv7-unknown-linux-gnueabi/debug/pb_covers"
+            ],
+            "type": "lldb"
+        },
+    ],
+    "inputs": [
+        {
+            "default": "192.168.0.60:10003",
+            "description": "The listen address of the launched gdbserver instance.",
+            "id": "gdbserver_listen_addr",
+            "type": "promptString"
+        }
+    ],
+    "version": "0.2.0"
+}

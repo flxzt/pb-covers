@@ -1,0 +1,8 @@
+{
+    "rust-analyzer.cargo.features": [
+        "inkview",
+        "sdk-5-19",
+        "simulator"
+    ],
+    "rust-analyzer.cargo.noDefaultFeatures": true,
+}

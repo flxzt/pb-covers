@@ -1,0 +1,45 @@
+[package]
+authors = ["Felix Zwettler <flxzt@posteo.de>"]
+edition = "2024"
+license = "GPL-3.0-or-later"
+name = "pb-covers"
+version = "0.1.0"
+
+[[bin]]
+name = "pb-covers"
+path = "src/bin/pb.rs"
+
+[[bin]]
+name = "pb-covers-cli"
+path = "src/bin/cli.rs"
+
+[dependencies]
+anyhow = "1.0"
+embedded-graphics = "0.8.1"
+embedded-graphics-core = "0.4.0"
+hayro = { version = "0.7.1", features = ["embed-fonts"] }
+image = { version = "0.25.10", default-features = false, features = [
+    "png",
+    "jpeg",
+    "gif",
+] }
+inkview = { version = "0.3.0", default-features = false }
+inkview-eg = { version = "0.3.0", default-features = false }
+roxmltree = "0.21.1"
+zip = "8.6.0"
+
+[features]
+default = []
+sdk-5-19 = ["inkview/sdk-5-19"]
+sdk-6-10 = ["inkview/sdk-6-10"]
+sdk-6-11 = ["inkview/sdk-6-11"]
+sdk-6-5 = ["inkview/sdk-6-5"]
+sdk-6-8 = ["inkview/sdk-6-8"]
+
+[profile.release]
+lto = 'fat'
+strip = true
+
+[patch.crates-io]
+inkview = { git = "https://github.com/simmsb/inkview-rs", branch = "master" }
+inkview-eg = { git = "https://github.com/simmsb/inkview-rs", branch = "master" }
